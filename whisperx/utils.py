@@ -4,6 +4,8 @@ import re
 import sys
 import zlib
 from typing import Callable, Optional, TextIO
+import math
+import statistics
 
 LANGUAGES = {
     "en": "english",
@@ -403,6 +405,83 @@ class WriteJSON(ResultWriter):
         json.dump(result, file, ensure_ascii=False)
 
 
+class WriteTXTW(ResultWriter):
+    extension: str = "txtw"
+
+    def write_result(self, result: dict, file: TextIO, options: dict):
+        '''
+        - take the median (not average) interval length between spoken words = I
+        - for each interval length i between words calculate prosody = i/I
+        - calculate number prosody tokens (or type of prosody token) = int((i*3)/I)
+        - generate text with repeated prosody tokens between words
+        '''
+        
+        averageInterval = self.calculateMedianInterval(result)
+        
+        previousWordEnd = 0
+        for segment in result["segments"]:
+            #print("\nsegment:")
+            if "words" in segment:
+                for word in segment["words"]:
+                    if "start" in word:
+                        if(previousWordEnd > 0):
+                            i = 1000*word["start"] - previousWordEnd
+                            #print("i = ", i)
+                            prosodyString = self.generateProsodyTokens(i, averageInterval)
+                            print(prosodyString, file=file, end="")
+                        print(word["word"], file=file, end="")
+                        previousWordEnd = 1000*word["end"]
+            print("", file=file, flush=True)
+    
+    def generateProsodyTokens(self, i, averageInterval):
+        averageNumberProsodyTokens = 3
+        prosodyToken = ' '    #CHECKTHIS
+        
+        numberProsodyTokens = math.ceil((i*averageNumberProsodyTokens)/averageInterval)
+        prosodyString = prosodyToken * numberProsodyTokens
+        return prosodyString
+        
+    def calculateMedianInterval(self, result):
+        previousWordEnd = 0
+        #averageInterval = 0
+        #wordCount = 0
+        intervalList = []
+        for segment in result["segments"]:
+            if "words" in segment:
+                for word in segment["words"]:
+                    if "start" in word:
+                        if(previousWordEnd > 0):
+                            i = 1000*word["start"] - previousWordEnd
+                            intervalList.append(i)
+                            #averageInterval += i
+                            #wordCount += 1
+                        previousWordEnd = 1000*word["end"]
+        #averageInterval /= wordCount
+        averageInterval = statistics.median(intervalList)
+        return averageInterval
+            
+class WriteTSVW(ResultWriter):
+    """
+    Write a transcript to a file in TSV (tab-separated values) format containing lines like:
+    <start time in integer milliseconds>\t<end time in integer milliseconds>\t<transcript text>
+
+    Using integer milliseconds as start and end times means there's no chance of interference from
+    an environment setting a language encoding that causes the decimal in a floating point number
+    to appear as a comma; also is faster and more efficient to parse & store, e.g., in C++.
+    """
+
+    extension: str = "tsvw"
+
+    def write_result(self, result: dict, file: TextIO, options: dict):
+        print("start", "end", "text", sep="\t", file=file)
+        for segment in result["segments"]:
+            if "words" in segment:
+                for word in segment["words"]:
+                    if "start" in word:
+                        print(round(1000 * word["start"]), file=file, end="\t")
+                        print(round(1000 * word["end"]), file=file, end="\t")
+                        print(word["word"].strip().replace("\t", " "), file=file, flush=True)
+
 def get_writer(
     output_format: str, output_dir: str
 ) -> Callable[[dict, TextIO, dict], None]:
@@ -412,6 +491,8 @@ def get_writer(
         "srt": WriteSRT,
         "tsv": WriteTSV,
         "json": WriteJSON,
+        "tsvw": WriteTSVW,
+        "txtw": WriteTXTW,
     }
     optional_writers = {
         "aud": WriteAudacity,
